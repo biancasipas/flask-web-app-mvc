@@ -1,12 +1,29 @@
 from flask import Flask, request, send_from_directory, render_template
 from sqlalchemy.exc import IntegrityError
+from flasgger import Swagger
 
 from model import Session, Produto
 from model.comentario import Comentario
 
-
 app = Flask(__name__)
 
+# --- Configuração do Flasgger/Swagger ---
+swagger_config = {
+    "headers": [],
+    "specs": [
+        {
+            "endpoint": 'apispec_1',
+            "route": '/openapi.json',  # JSON da especificação
+        }
+    ],
+    "static_url_path": "/flasgger_static",
+    "swagger_ui": True,
+    "specs_route": "/openapi/"   # URL do Swagger UI
+}
+
+swagger = Swagger(app, config=swagger_config)
+
+# --- Rotas ---
 
 @app.route('/')
 def home():
@@ -20,6 +37,30 @@ def favicon():
 
 @app.route('/add_produto', methods=['POST'])
 def add_produto():
+    """
+    Adiciona um produto
+    ---
+    parameters:
+      - name: nome
+        in: formData
+        type: string
+        required: true
+      - name: quantidade
+        in: formData
+        type: integer
+        required: true
+      - name: valor
+        in: formData
+        type: number
+        required: true
+    responses:
+      200:
+        description: Produto adicionado com sucesso
+      400:
+        description: Não foi possível salvar novo item
+      409:
+        description: Produto de mesmo nome já salvo na base
+    """
     session = Session()
     produto = Produto(
         nome=request.form.get("nome"),
@@ -27,12 +68,10 @@ def add_produto():
         valor=request.form.get("valor")
     )
     try:
-        # adicionando produto
         session.add(produto)
-        # efetivando o camando de adição de novo item na tabela
         session.commit()
         return render_template("produto.html", produto=produto), 200
-    except IntegrityError as e:
+    except IntegrityError:
         error_msg = "Produto de mesmo nome já salvo na base :/"
         return render_template("error.html", error_code=409, error_msg=error_msg), 409
     except Exception as e:
@@ -43,6 +82,20 @@ def add_produto():
 
 @app.route('/get_produto/<produto_id>', methods=['GET'])
 def get_produto(produto_id):
+    """
+    Busca um produto pelo ID
+    ---
+    parameters:
+      - name: produto_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Produto encontrado
+      404:
+        description: Produto não encontrado
+    """
     session = Session()
     produto = session.query(Produto).filter(Produto.id == produto_id).first()
     if not produto:
@@ -54,31 +107,108 @@ def get_produto(produto_id):
 
 @app.route('/del_produto/<produto_id>', methods=['DELETE'])
 def del_produto(produto_id):
+    """
+    Deleta um produto pelo ID
+    ---
+    parameters:
+      - name: produto_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Produto deletado com sucesso
+      404:
+        description: Produto não encontrado
+    """
     session = Session()
     count = session.query(Produto).filter(Produto.id == produto_id).delete()
     session.commit()
-    if count ==1:
+    if count == 1:
         return render_template("deletado.html", produto_id=produto_id), 200
-    else: 
+    else:
         error_msg = "Produto não encontrado na base :/"
         return render_template("error.html", error_code=404, error_msg=error_msg), 404
 
 
 @app.route('/add_comentario/<produto_id>', methods=['POST'])
 def add_comentario(produto_id):
+    """
+    Adiciona um comentário a um produto
+    ---
+    parameters:
+      - name: produto_id
+        in: path
+        type: integer
+        required: true
+      - name: autor
+        in: formData
+        type: string
+        required: true
+      - name: texto
+        in: formData
+        type: string
+        required: true
+      - name: n_estrela
+        in: formData
+        type: integer
+        required: false
+    responses:
+      200:
+        description: Comentário adicionado com sucesso
+      404:
+        description: Produto não encontrado
+    """
     session = Session()
     produto = session.query(Produto).filter(Produto.id == produto_id).first()
     if not produto:
         error_msg = "Produto não encontrado na base :/"
-        return render_template("error.html", error_code= 404, error_msg=error_msg), 404
+        return render_template("error.html", error_code=404, error_msg=error_msg), 404
 
     autor = request.form.get("autor")
     texto = request.form.get("texto")
     n_estrelas = request.form.get("n_estrela")
     if n_estrelas:
         n_estrelas = int(n_estrelas)
+    else:
+        n_estrelas = 0
 
+    # Cria o comentário e vincula ao produto
     comentario = Comentario(autor, texto, n_estrelas)
-    produto.adiciona_comentario(comentario)
+    comentario.produto = produto.id 
+    session.add(comentario)                  
     session.commit()
+
     return render_template("produto.html", produto=produto), 200
+
+@app.route('/del_comentario/<comentario_id>', methods=['DELETE'])
+def del_comentario(comentario_id):
+    """
+    Deleta um comentário pelo ID
+    ---
+    parameters:
+      - name: comentario_id
+        in: path
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Comentário deletado com sucesso
+      404:
+        description: Comentário não encontrado
+    """
+    session = Session()
+
+    count = session.query(Comentario).filter(Comentario.id == comentario_id).delete()
+    session.commit()
+
+    if count == 1:
+        return f"Comentário {comentario_id} deletado com sucesso!", 200
+    else:
+        error_msg = "Comentário não encontrado :/"
+        return render_template("error.html", error_code=404, error_msg=error_msg), 404
+
+
+# --- Rodando o app ---
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
